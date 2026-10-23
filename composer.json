@@ -1,0 +1,14 @@
+{
+    "name": "qbix/safescript",
+    "description": "SafeScript — a safe computational subset of JavaScript, compiled to PHP",
+    "type": "library",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "SafeScript\\": "src/"
+        }
+    },
+    "require": {
+        "php": ">=8.1"
+    }
+}
