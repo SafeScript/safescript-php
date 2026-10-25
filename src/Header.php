@@ -27,7 +27,7 @@ class Header
      */
     public static function parseHeader(string $source): array
     {
-        $result = ['version' => null, 'env' => [], 'needs' => [], 'uses' => []];
+        $result = ['version' => null, 'env' => null, 'needs' => [], 'uses' => [], 'types' => []];
         $raw = self::extractHeader($source);
         if ($raw === null) return $result;
 
@@ -43,10 +43,19 @@ class Header
                 $result['version'] = trim($m[1]);
             } elseif (preg_match('/@needs\s+(\w+)\s*:\s*(.+)/', $line, $m)) {
                 $result['needs'][] = ['name' => trim($m[1]), 'type' => trim($m[2])];
+            } elseif (preg_match('/@needs\s+(\w+)\s*$/', $line, $m)) {
+                $result['needs'][] = ['name' => trim($m[1]), 'type' => null];
             } elseif (preg_match('/@uses\s+(\w+)\s*:\s*(.+)/', $line, $m)) {
                 $result['uses'][] = ['name' => trim($m[1]), 'type' => trim($m[2])];
+            } elseif (preg_match('/@uses\s+(\w+)\s*$/', $line, $m)) {
+                $result['uses'][] = ['name' => trim($m[1]), 'type' => null];
             } elseif (preg_match('/@env\s+(.+)/', $line, $m)) {
                 $result['env'] = array_map('trim', explode(',', $m[1]));
+            } elseif (preg_match('/@type\s+(\w+)\s*\{\s*([^}]*)\}/', $line, $m)) {
+                $methods = array_map('trim', explode(',', $m[2]));
+                $methods = array_filter($methods, fn($s) => $s !== '');
+                $methods = array_values($methods);
+                $result['types'][] = ['name' => trim($m[1]), 'methods' => $methods];
             }
         }
 

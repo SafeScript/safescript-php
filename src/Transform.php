@@ -62,6 +62,14 @@ class Transform
             return self::callNode('__set', [$obj, $key, $binExpr], $node['loc']);
         }
 
+        // obj.name = val — handled in emitter (needs PHP bracket lvalue for nested reference)
+        // obj.name++ / obj.name-- — handled in emitter
+
+        // ── ThisExpression → Identifier __safeThis ──
+        if ($type === 'ThisExpression') {
+            return ['type' => 'Identifier', 'name' => '__safeThis', 'loc' => $node['loc'] ?? ['line' => 0, 'col' => 0]];
+        }
+
         // ── Recurse into children ──
         $node = self::recurse($node);
 

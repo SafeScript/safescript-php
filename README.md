@@ -15,13 +15,12 @@ use SafeScript\SafeScript;
 $result = SafeScript::run('return x + y;', ['x' => 10, 'y' => 20]);
 // → 30
 
-// Only what you inject is accessible
-$result = SafeScript::run('return typeof Object;', []);  // → 'undefined'
+// Safe globals are available by default — no injection needed
+$result = SafeScript::run('return Math.floor(3.7);', []);   // → 3
+$result = SafeScript::run('return Object.keys(obj);', ['obj' => ['a' => 1, 'b' => 2]]);  // → ['a', 'b']
 
-// Inject what you need
-$result = SafeScript::run('return Math.sqrt(16);', ['Math' => $Math]);
-// Built-in Math is available automatically:
-$result = SafeScript::run('return Math.sqrt(16);', []);  // → 4
+// Math.random is deterministic by default (mulberry32 PRNG, seed 0)
+$result = SafeScript::run('return Math.random();', []);  // → same value every time
 ```
 
 ## Install
@@ -75,6 +74,9 @@ $result = SafeScript::run($source, $scope, ['timeout' => 5, 'maxOps' => 1000000]
 - `timeout` — max seconds (capped at 60). Always enforced even if omitted.
 - `maxOps` — max operations / guard checks (capped at 100,000,000). Always enforced even if omitted.
 - `hooks` — `['beforeCall' => fn, 'afterCall' => fn]` to intercept scope function calls. See [Hooks](#hooks).
+- `seed` — PRNG seed. Default `0` (deterministic). Any integer for a custom seed. `null` for true `Math.random` (requires `env.Random`).
+- `env` — `['Random' => true]` to approve environment capabilities.
+- `facades` — per-method `this` facades.
 
 **Scope** is an associative array of names available to the SafeScript code. Functions can be injected:
 
@@ -99,7 +101,7 @@ Parse SafeScript source to an ESTree-like AST.
 
 ### `SafeScript::capabilities($source)`
 
-Extract header metadata from a `.safe` file: `version`, `env`, `needs`, `uses`.
+Extract header metadata from a `.safe` file: `version`, `env`, `needs`, `uses`, `types`.
 
 ### `SafeScript::checkScope($source, $scope)`
 
@@ -124,6 +126,25 @@ $result = SafeScript::load($safeSource, function($name) {
 
 Deep-copy a value, stripping blocked properties (`__proto__`, `constructor`, etc.) for safe injection into scope.
 
+### `SafeScript::lib($name, $value)` / `SafeScript::lib($className, $config)` / `SafeScript::lib($typeName, $className, $config)`
+
+Three forms:
+- `lib($name, $value)` — register a named library (auto-resolved by `load()` for `@needs`/`@uses`)
+- `lib($className, ['allowMethods' => [...]])` — register a type whitelist for runtime method enforcement
+- `lib($typeName, $className, ['allowMethods' => [...]])` — register a named type (for `@type` header validation) and class whitelist (for runtime enforcement)
+
+### `SafeScript::unlib($name)`
+
+Unregister a named library, a type registration, or a named type mapping.
+
+### `SafeScript::libs()`
+
+Returns an array of registered library names.
+
+### `SafeScript::clearTypeRegistry()`
+
+Clear all type registrations (both class whitelists and named type mappings).
+
 ## The `.safe` File Format
 
 SafeScript files use the `.safe` extension. A `.safe` file declares capabilities at the top:
@@ -134,6 +155,7 @@ SafeScript files use the `.safe` extension. A `.safe` file declares capabilities
  * @needs request: Request
  * @needs db: Database
  * @uses logger: Logger
+ * @type Response { json, text, status }
  */
 
 var user = db.find(request.userId);
@@ -143,11 +165,40 @@ if (!user) {
 return { name: user.name, email: user.email };
 ```
 
+Header directives:
+- `@safescript <version>` — language version
+- `@needs <name>: <Type>` — required capability
+- `@uses <name>: <Type>` — optional capability
+- `@type <TypeName> { method1, method2 }` — declares a return type and the methods the script intends to call
+- `@env <env1>, <env2>` — environment constraints
+
+### Type Registry
+
+When host functions return objects, SafeScript blocks all method calls on unregistered types. The type registry controls access:
+
+```php
+// Register a type with allowed methods
+SafeScript::lib(Counter::class, ['allowMethods' => ['value', 'increment', 'toString']]);
+
+// Now SafeScript code can call those methods — and only those
+$result = SafeScript::run('return c.value()', ['c' => new Counter(42)]);
+// → 42
+
+// Named type registration (for @type header validation)
+SafeScript::lib('Response', ResponseClass::class, ['allowMethods' => ['json', 'text', 'status']]);
+```
+
+### The `.safe` File as a Trust Unit
+
+A `.safe` file is a unit of trust — one set of declarations, one sandbox boundary. If you want two functions with different access patterns, put them in two `.safe` files. Each gets its own scope, its own type declarations, and its own sandbox.
+
+SafeScript protects the **host's** environment. User protection comes from a different layer — attestations about the host, not constraints in SafeScript. See [Safebots layers](https://safebots.ai/layers.html).
+
 ## What's Blocked
 
 SafeScript blocks dangerous constructs at four levels:
 
-1. **Token/grammar allowlist** — `eval`, `Function`, `import`, `require`, `new`, `delete`, `with`, `class`, `super`, `this`, `globalThis`, `window`, `document`, `process` are all blocked at tokenization
+1. **Token/grammar allowlist** — `eval`, `Function`, `import`, `require`, `new`, `delete`, `with`, `class`, `super`, `globalThis`, `window`, `document`, `process` are all blocked at tokenization. (`this` is allowed — it compiles to a safe internal identifier.)
 2. **AST validation** — property access to `__proto__`, `constructor`, `prototype`, `__defineGetter__`, etc.
 3. **Runtime guards** — bracket access goes through `__at()` / `__set()` which check property names at runtime
 4. **Execution guards + hooks** — compile-time injected `__check()` enforces timeout/ops limits; hooks intercept calls to injected scope functions for resource throttling
@@ -216,10 +267,10 @@ $result = SafeScript::run($source, $scope, [
 ## Running Tests
 
 ```bash
-php test.php
+php test.php                 # main test suite (186+ tests)
+php test-type-registry.php   # type registry — method whitelisting
+php test-type-header.php     # @type header declarations + load() validation
 ```
-
-Runs 163 tests covering tokenizer, parser, validator, compiler pipeline, runtime execution, security, header parsing, API, execution guards, hooks, and example programs (fibonacci, factorial, string manipulation, try-catch, closures, etc.).
 
 ## License
 

@@ -11,7 +11,9 @@ class Defs
     /** Identifiers that cannot appear in SafeScript source */
     public const BLOCKED = [
         'constructor' => true, '__proto__' => true, 'prototype' => true,
-        'this' => true, 'arguments' => true,
+        'arguments' => true,
+        // Internal runtime identifiers (must not be shadowed by user code)
+        '__safeThis' => true, '__thisCell' => true, '__safeGlobals' => true,
         'eval' => true, 'Function' => true,
         'globalThis' => true, 'window' => true, 'document' => true,
         'navigator' => true, 'self' => true, 'top' => true,
@@ -51,6 +53,7 @@ class Defs
         'true' => true, 'false' => true, 'null' => true,
         'undefined' => true,
         'instanceof' => true,
+        'this' => true,
     ];
 
     /** Properties blocked at runtime (bracket + dot access) */

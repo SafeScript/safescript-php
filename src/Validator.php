@@ -45,6 +45,9 @@ class Validator
                 }
                 break;
 
+            case 'ThisExpression':
+                break;
+
             case 'Literal':
                 break;
 

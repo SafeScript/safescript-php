@@ -55,8 +55,20 @@ function __set($obj, $key, $val) {
 
 function __prop($obj, $name) {
     if ($obj === null) throw new \RuntimeException('Cannot read property "' . $name . '" of null');
-    if (is_array($obj)) return $obj[$name] ?? null;
-    if (is_object($obj)) return $obj->$name ?? null;
+    if (is_array($obj)) {
+        if ($name === 'length') return count($obj);
+        return $obj[$name] ?? null;
+    }
+    if (is_object($obj)) {
+        // Map JS Error property names to PHP Throwable getters (protected in PHP)
+        if ($obj instanceof \Throwable) {
+            switch ($name) {
+                case 'message': return $obj->getMessage();
+                case 'name': return get_class($obj);
+            }
+        }
+        return $obj->$name ?? null;
+    }
     if (is_string($obj) && $name === 'length') return strlen($obj);
     return null;
 }
@@ -68,9 +80,74 @@ function __prop_opt($obj, $name) {
 
 function __set_prop(&$obj, $name, $val) {
     if ($obj === null) throw new \RuntimeException('Cannot set property "' . $name . '" of null');
+    static $blocked = ['constructor'=>1,'__proto__'=>1,'prototype'=>1,
+        '__defineGetter__'=>1,'__defineSetter__'=>1,
+        '__lookupGetter__'=>1,'__lookupSetter__'=>1,
+        'caller'=>1,'callee'=>1,'arguments'=>1];
+    if (isset($blocked[$name])) {
+        throw new \RuntimeException('Cannot set blocked property "' . $name . '"');
+    }
     if (is_array($obj)) { $obj[$name] = $val; return $val; }
     if (is_object($obj)) { $obj->$name = $val; return $val; }
     return $val;
+}
+
+/** Sequence expression helper — evaluates all args, returns the last one. */
+function __seq() {
+    $args = func_get_args();
+    return end($args);
+}
+
+function __chk_obj($obj, $name) {
+    if ($obj === null) throw new \RuntimeException('Cannot set property "' . $name . '" of null');
+}
+
+/**
+ * Mutating method call — takes $obj by reference so array mutations (push/pop/splice/sort/reverse/shift/unshift/fill)
+ * actually modify the original variable. Used when the base object is a variable (Identifier node).
+ */
+function __mutMethod(&$obj, $name, ...$args) {
+    if ($obj === null) throw new \RuntimeException('Cannot read property "' . $name . '" of null');
+    // For arrays, handle mutating methods that need reference semantics
+    if (is_array($obj)) {
+        switch ($name) {
+            case 'push':
+                foreach ($args as $a) $obj[] = $a;
+                return count($obj);
+            case 'pop':
+                return array_pop($obj);
+            case 'shift':
+                return array_shift($obj);
+            case 'unshift':
+                array_unshift($obj, ...$args);
+                return count($obj);
+            case 'splice':
+                $start = $args[0] ?? 0;
+                $deleteCount = $args[1] ?? count($obj) - $start;
+                $items = array_slice($args, 2);
+                return array_splice($obj, $start, $deleteCount, $items);
+            case 'sort':
+                if (!empty($args) && is_callable($args[0])) {
+                    usort($obj, $args[0]);
+                } else {
+                    usort($obj, function($a, $b) { return strcmp((string)$a, (string)$b); });
+                }
+                return $obj;
+            case 'reverse':
+                $obj = array_reverse($obj);
+                return $obj;
+            case 'fill':
+                $val = $args[0] ?? null;
+                $start = $args[1] ?? 0;
+                $end = $args[2] ?? count($obj);
+                if ($start < 0) $start = max(0, count($obj) + $start);
+                if ($end < 0) $end = count($obj) + $end;
+                for ($i = $start; $i < $end; $i++) $obj[$i] = $val;
+                return $obj;
+        }
+    }
+    // Fall through to regular __method for non-mutating calls
+    return __method($obj, $name, ...$args);
 }
 
 function __method($obj, $name, ...$args) {
@@ -232,15 +309,65 @@ function __method($obj, $name, ...$args) {
             case 'toString': return implode(',', $obj);
         }
     }
-    // Object/callable methods
+    // Object/callable methods — plain associative arrays (scope objects)
     if (is_array($obj) && isset($obj[$name]) && is_callable($obj[$name])) {
         return ($obj[$name])(...$args);
     }
-    if (is_object($obj) && method_exists($obj, $name)) {
-        return $obj->$name(...$args);
-    }
-    if (is_object($obj) && isset($obj->$name) && is_callable($obj->$name)) {
-        return ($obj->$name)(...$args);
+    // Host objects
+    if (is_object($obj)) {
+        // Built-in error/exception family — allow all methods (matches JS SAFE_CTORS)
+        if ($obj instanceof \Throwable) {
+            $phpName = ($name === 'toString') ? '__toString' : $name;
+            if (method_exists($obj, $phpName)) {
+                return $obj->$phpName(...$args);
+            }
+            return null;
+        }
+        // Check type registry
+        $className = get_class($obj);
+        $registry = $GLOBALS['__safescript_type_registry'] ?? [];
+
+        // Check if this class (or any parent) is registered
+        $registeredClass = null;
+        if (isset($registry[$className])) {
+            $registeredClass = $className;
+        } else {
+            // Walk up the class hierarchy
+            foreach ($registry as $regClass => $_) {
+                if ($obj instanceof $regClass) {
+                    $registeredClass = $regClass;
+                    break;
+                }
+            }
+        }
+
+        if ($registeredClass !== null) {
+            // Registered type — check allowMethods whitelist
+            $config = $registry[$registeredClass];
+            $allowed = $config['allowMethods'] ?? [];
+            if (!in_array($name, $allowed, true)) {
+                throw new \RuntimeException(
+                    "SafeScript: method '{$name}' is not allowed on " .
+                    get_class($obj) . ". Registered methods: " .
+                    implode(', ', $allowed)
+                );
+            }
+            // Map JS toString() → PHP __toString()
+            $phpName = ($name === 'toString' && method_exists($obj, '__toString')) ? '__toString' : $name;
+            if (method_exists($obj, $phpName)) {
+                return $obj->$phpName(...$args);
+            }
+            if (isset($obj->$name) && is_callable($obj->$name)) {
+                return ($obj->$name)(...$args);
+            }
+            return null;
+        }
+
+        // Unregistered type — block all method calls (sandbox violation)
+        throw new \RuntimeException(
+            "SafeScript: cannot call method '{$name}' on unregistered type " .
+            get_class($obj) . ". Register it with SafeScript::lib()"
+        );
     }
     return null;
 }
@@ -396,7 +523,12 @@ $Object = [
         return $target;
     },
     'freeze' => function($obj) { return $obj; },
-    'create' => function($proto) { return []; },
+    'create' => function($proto) {
+        if ($proto !== null) {
+            throw new \TypeError('SafeScript: Object.create only allows null prototype');
+        }
+        return [];
+    },
     'fromEntries' => function($entries) {
         $r = [];
         foreach ($entries as $e) $r[$e[0]] = $e[1];
@@ -424,7 +556,16 @@ $Math = [
     'min' => function(...$args) { return min($args); },
     'pow' => function($base, $exp) { return pow($base, $exp); },
     'sqrt' => function($x) { return sqrt($x); },
-    'random' => function() { return mt_rand() / mt_getrandmax(); },
+    'random' => function() use (&$__rng_state) {
+        $__rng_state = ($__rng_state + 0x6D2B79F5) & 0xFFFFFFFF;
+        $t = $__rng_state ^ ($__rng_state >> 15);
+        // PHP imul equivalent: multiply and mask to 32-bit
+        $t = intval(($t * (1 | $__rng_state)) & 0xFFFFFFFF);
+        $t2 = $t ^ ($t >> 7);
+        $t = ($t + intval(($t2 * (61 | $t)) & 0xFFFFFFFF)) ^ $t;
+        $t = $t & 0xFFFFFFFF;
+        return (($t ^ ($t >> 14)) & 0xFFFFFFFF) / 4294967296;
+    },
     'log' => function($x) { return log($x); },
     'log2' => function($x) { return log($x, 2); },
     'log10' => function($x) { return log10($x); },
@@ -472,6 +613,11 @@ $isNaN = function($val) { return is_float($val) && is_nan($val); };
 $isFinite = function($val) { return is_numeric($val) && is_finite($val); };
 $encodeURIComponent = function($str) { return rawurlencode($str); };
 $decodeURIComponent = function($str) { return rawurldecode($str); };
+$encodeURI = function($str) { return str_replace(['%3A','%2F','%3F','%23','%5B','%5D','%40','%21','%24','%26','%27','%28','%29','%2A','%2B','%2C','%3B','%3D'], [':','/','?','#','[',']','@','!','$','&',"'",'(',')','*','+',',',';','='], rawurlencode($str)); };
+$decodeURI = function($str) { return rawurldecode($str); };
+$NaN = NAN;
+$Infinity = INF;
+$__thisCell = ['value' => null];
 
 PHP;
     }

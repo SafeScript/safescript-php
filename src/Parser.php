@@ -1102,6 +1102,10 @@ class Parser
                 $n['name'] = 'undefined';
                 return $n;
             }
+            if ($v === 'this') {
+                $this->pos++;
+                return $this->node('ThisExpression', $tok['line'], $tok['col']);
+            }
             if ($v === 'function') {
                 return $this->_parseFunctionExpr();
             }

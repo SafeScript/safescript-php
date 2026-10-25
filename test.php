@@ -428,10 +428,8 @@ test('validate allows normal code', function () {
     eq(true, SafeScript::validate('function add(a, b) { return a + b; }'));
 });
 
-test('validate blocks this', function () {
-    throws(function () {
-        SafeScript::validate('var x = this;');
-    }, 'Blocked');
+test('validate allows this (transformed to __safeThis)', function () {
+    eq(true, SafeScript::validate('var x = this;'));
 });
 
 test('validate blocks arguments', function () {
@@ -1088,8 +1086,10 @@ test('hooks beforeCall — intercept scope function calls', function () {
         'greet' => function ($name) { return "hello $name"; },
     ], [
         'hooks' => [
-            'beforeCall' => function ($name, $args) use (&$log) {
-                $log[] = "before:$name:" . implode(',', $args);
+            'beforeCall' => function ($info) use (&$log) {
+                $log[] = "before:{$info['name']}:" . implode(',', $info['args']);
+                eq(true, isset($info['callCount']), 'info has callCount');
+                eq(true, isset($info['elapsed']), 'info has elapsed');
                 return null; // proceed normally
             },
         ],
@@ -1105,8 +1105,8 @@ test('hooks beforeCall — block call (return false)', function () {
         'dangerous' => function ($x) { return "EXECUTED: $x"; },
     ], [
         'hooks' => [
-            'beforeCall' => function ($name, $args) {
-                if ($name === 'dangerous') return false; // block
+            'beforeCall' => function ($info) {
+                if ($info['name'] === 'dangerous') return false; // block
                 return null;
             },
         ],
@@ -1121,8 +1121,8 @@ test('hooks beforeCall — short-circuit with value', function () {
         'fetchData' => function ($key) { return "real:$key"; },
     ], [
         'hooks' => [
-            'beforeCall' => function ($name, $args) {
-                if ($name === 'fetchData') return ['value' => 'cached:' . $args[0]];
+            'beforeCall' => function ($info) {
+                if ($info['name'] === 'fetchData') return ['value' => 'cached:' . $info['args'][0]];
                 return null;
             },
         ],
@@ -1137,9 +1137,9 @@ test('hooks beforeCall — transform args', function () {
         'add' => function ($a, $b) { return $a + $b; },
     ], [
         'hooks' => [
-            'beforeCall' => function ($name, $args) {
+            'beforeCall' => function ($info) {
                 // Double all args
-                return ['args' => array_map(fn($a) => $a * 2, $args)];
+                return ['args' => array_map(fn($a) => $a * 2, $info['args'])];
             },
         ],
     ]);
@@ -1153,9 +1153,9 @@ test('hooks afterCall — inspect and replace result', function () {
         'compute' => function ($x) { return $x * $x; },
     ], [
         'hooks' => [
-            'afterCall' => function ($name, $result, $args) {
+            'afterCall' => function ($info) {
                 // Cap result at 20
-                if ($result > 20) return ['value' => 20];
+                if ($info['result'] > 20) return ['value' => 20];
                 return null;
             },
         ],
@@ -1170,7 +1170,7 @@ test('hooks afterCall — block result', function () {
         'getData' => function () { return ['secret' => 'password']; },
     ], [
         'hooks' => [
-            'afterCall' => function ($name, $result, $args) {
+            'afterCall' => function ($info) {
                 return false; // block
             },
         ],
@@ -1186,12 +1186,12 @@ test('hooks — both beforeCall and afterCall together', function () {
         'transform' => function ($x) { return strtoupper($x); },
     ], [
         'hooks' => [
-            'beforeCall' => function ($name, $args) use (&$log) {
-                $log[] = "before:$name";
+            'beforeCall' => function ($info) use (&$log) {
+                $log[] = "before:{$info['name']}";
                 return null;
             },
-            'afterCall' => function ($name, $result, $args) use (&$log) {
-                $log[] = "after:$name:$result";
+            'afterCall' => function ($info) use (&$log) {
+                $log[] = "after:{$info['name']}:{$info['result']}";
                 return null;
             },
         ],
@@ -1208,7 +1208,7 @@ test('hooks — non-callable scope values are not wrapped', function () {
         'y' => 20,
     ], [
         'hooks' => [
-            'beforeCall' => function ($name, $args) {
+            'beforeCall' => function ($info) {
                 throw new \RuntimeException("Should not be called for non-functions");
             },
         ],
@@ -1230,8 +1230,8 @@ test('hooks — resource throttling use case', function () {
             'loadData' => function ($id) { return "data:$id"; },
         ], [
             'hooks' => [
-                'beforeCall' => function ($name, $args) use (&$callCount, $maxCalls) {
-                    if ($name === 'loadData') {
+                'beforeCall' => function ($info) use (&$callCount, $maxCalls) {
+                    if ($info['name'] === 'loadData') {
                         $callCount++;
                         if ($callCount > $maxCalls) {
                             throw new \RuntimeException('SafeScript: resource limit — too many loadData calls');
@@ -1243,6 +1243,434 @@ test('hooks — resource throttling use case', function () {
         ]);
     }, 'too many loadData calls');
     eq(4, $callCount); // 3 succeeded + 1 that threw
+});
+
+// ── Callable parity: string callables, array callables, nested scope ──
+
+test('hooks — string callable in scope gets wrapped', function () {
+    $log = [];
+    $result = SafeScript::run('return upper("hello")', [
+        'upper' => 'strtoupper',
+    ], [
+        'hooks' => [
+            'beforeCall' => function ($info) use (&$log) {
+                $log[] = $info['name'];
+                return null;
+            },
+        ],
+    ]);
+    eq('HELLO', $result);
+    eq(['upper'], $log);
+});
+
+test('hooks — array callable [$obj, method] in scope gets wrapped', function () {
+    $obj = new class {
+        public function greet(string $name): string { return "hi $name"; }
+    };
+    $log = [];
+    $result = SafeScript::run('return greeter("world")', [
+        'greeter' => [$obj, 'greet'],
+    ], [
+        'hooks' => [
+            'beforeCall' => function ($info) use (&$log) {
+                $log[] = $info['name'];
+                return null;
+            },
+        ],
+    ]);
+    eq('hi world', $result);
+    eq(['greeter'], $log);
+});
+
+test('hooks — static array callable [Class, method] gets wrapped', function () {
+    $log = [];
+
+    // A real class with a static method
+    $cls = new class {
+        public static function shout(string $s): string { return strtoupper($s); }
+    };
+    $className = get_class($cls);
+
+    $result = SafeScript::run('return fn("hello")', [
+        'fn' => [$className, 'shout'],
+    ], [
+        'hooks' => [
+            'beforeCall' => function ($info) use (&$log) {
+                $log[] = $info['name'];
+                return null; // proceed
+            },
+        ],
+    ]);
+    eq('HELLO', $result);
+    eq(['fn'], $log);
+});
+
+test('hooks — nested scope gets dotted names', function () {
+    $names = [];
+    $result = SafeScript::run('db.query("SELECT 1"); db.insert("x"); return "ok"', [
+        'db' => [
+            'query' => function ($sql) { return $sql; },
+            'insert' => function ($data) { return $data; },
+        ],
+    ], [
+        'hooks' => [
+            'beforeCall' => function ($info) use (&$names) {
+                $names[] = $info['name'];
+                return null;
+            },
+        ],
+    ]);
+    eq('ok', $result);
+    eq(2, count($names));
+    eq('db.query', $names[0]);
+    eq('db.insert', $names[1]);
+});
+
+test('hooks — deeply nested scope gets full dotted path', function () {
+    $names = [];
+    $result = SafeScript::run('return api.users.list()', [
+        'api' => [
+            'users' => [
+                'list' => function () { return ['a', 'b']; },
+            ],
+        ],
+    ], [
+        'hooks' => [
+            'beforeCall' => function ($info) use (&$names) {
+                $names[] = $info['name'];
+                return null;
+            },
+        ],
+    ]);
+    eq(['a', 'b'], $result);
+    eq(['api.users.list'], $names);
+});
+
+test('hooks — callCount increments across calls', function () {
+    $counts = [];
+    SafeScript::run('fn(); fn(); fn(); return "done"', [
+        'fn' => function () {},
+    ], [
+        'hooks' => [
+            'beforeCall' => function ($info) use (&$counts) {
+                $counts[] = $info['callCount'];
+                return null;
+            },
+        ],
+    ]);
+    eq([1, 2, 3], $counts);
+});
+
+test('hooks — elapsed time is tracked', function () {
+    $elapsed = null;
+    SafeScript::run('return fn()', [
+        'fn' => function () { return 42; },
+    ], [
+        'hooks' => [
+            'beforeCall' => function ($info) use (&$elapsed) {
+                $elapsed = $info['elapsed'];
+                return null;
+            },
+        ],
+    ]);
+    eq(true, $elapsed !== null && $elapsed >= 0, 'elapsed should be a non-negative number');
+});
+
+test('hooks — array callable blocked by beforeCall', function () {
+    $obj = new class {
+        public function danger(): string { return "SHOULD NOT RUN"; }
+    };
+    $result = SafeScript::run('return action()', [
+        'action' => [$obj, 'danger'],
+    ], [
+        'hooks' => [
+            'beforeCall' => function ($info) { return false; },
+        ],
+    ]);
+    eq(null, $result);
+});
+
+echo "\n";
+
+// ═══════════════════════════════════════════════════════════════
+// PHASE 7: PHP PARITY TESTS
+// ═══════════════════════════════════════════════════════════════
+echo "\nPhase 7 (this/RNG/libs): ";
+
+test('this compiles to __safeThis', function () {
+    $result = Compiler::compile('var x = this;');
+    eq(true, str_contains($result['code'], '__safeThis'));
+});
+
+test('this returns null at top level', function () {
+    $result = SafeScript::run('return this', []);
+    eq(null, $result);
+});
+
+test('deterministic RNG — same seed same results', function () {
+    $r1 = SafeScript::run('return Math.random()', [], ['seed' => 42]);
+    $r2 = SafeScript::run('return Math.random()', [], ['seed' => 42]);
+    eq($r1, $r2);
+});
+
+test('deterministic RNG — different seeds differ', function () {
+    $r1 = SafeScript::run('return Math.random()', [], ['seed' => 1]);
+    $r2 = SafeScript::run('return Math.random()', [], ['seed' => 2]);
+    eq(true, $r1 !== $r2);
+});
+
+test('Math.random returns [0,1)', function () {
+    $result = SafeScript::run('
+        var ok = true;
+        for (var i = 0; i < 100; i++) {
+            var r = Math.random();
+            if (r < 0 || r >= 1) ok = false;
+        }
+        return ok
+    ', [], ['seed' => 123]);
+    eq(true, $result);
+});
+
+test('Object.create(null) works', function () {
+    $result = SafeScript::run('var o = Object.create(null); return typeof o', []);
+    eq('object', $result);
+});
+
+test('Object.create with non-null throws', function () {
+    throws(function () {
+        SafeScript::run('var o = Object.create({})', []);
+    }, 'null prototype');
+});
+
+test('seed:null without env.Random throws', function () {
+    throws(function () {
+        SafeScript::run('return Math.random()', [], ['seed' => null]);
+    }, 'env.Random');
+});
+
+test('seed:null with env.Random works', function () {
+    $result = SafeScript::run('return Math.random()', [], ['seed' => null, 'env' => ['Random']]);
+    eq(true, is_float($result) && $result >= 0 && $result < 1);
+});
+
+test('lib/unlib/libs registration', function () {
+    SafeScript::lib('testLib', ['greet' => function($n) { return "hi $n"; }]);
+    eq(true, in_array('testLib', SafeScript::libs()));
+    SafeScript::unlib('testLib');
+    eq(false, in_array('testLib', SafeScript::libs()));
+});
+
+test('load auto-fills from registered libs', function () {
+    SafeScript::lib('myMath', ['double' => function($x) { return $x * 2; }]);
+    $source = "/**\n * @needs myMath: Obj\n */\nreturn myMath.double(5)";
+    $result = SafeScript::load($source);
+    eq(10, $result);
+    SafeScript::unlib('myMath');
+});
+
+test('encodeURI and decodeURI exist', function () {
+    $result = SafeScript::run('return encodeURI("hello world")', []);
+    eq('hello%20world', $result);
+});
+
+test('NaN and Infinity globals exist', function () {
+    $result = SafeScript::run('return isNaN(NaN)', []);
+    eq(true, $result);
+    $result2 = SafeScript::run('return Infinity > 999999', []);
+    eq(true, $result2);
+});
+
+test('__safeThis blocked as identifier', function () {
+    throws(function () {
+        SafeScript::run('var __safeThis = 1', []);
+    }, 'Blocked');
+});
+
+test('__thisCell blocked as identifier', function () {
+    throws(function () {
+        SafeScript::run('var __thisCell = 1', []);
+    }, 'Blocked');
+});
+
+echo "\n";
+
+// ── Dot-property assignment ──────────────────────────────────
+echo "\nDot-property assignment:\n";
+
+test('dot assign — simple', function () {
+    eq(5, SafeScript::run('var o = {x: 1}; o.x = 5; return o.x'));
+});
+
+test('dot assign — compound +=', function () {
+    eq(15, SafeScript::run('var o = {x: 10}; o.x += 5; return o.x'));
+});
+
+test('dot assign — compound -=', function () {
+    eq(7, SafeScript::run('var o = {x: 10}; o.x -= 3; return o.x'));
+});
+
+test('dot assign — compound *=', function () {
+    eq(12, SafeScript::run('var o = {x: 4}; o.x *= 3; return o.x'));
+});
+
+test('dot assign — string +=', function () {
+    eq('hello world', SafeScript::run('var o = {s: "hello"}; o.s += " world"; return o.s'));
+});
+
+test('dot assign — prefix ++', function () {
+    eq([4, 4], SafeScript::run('var o = {x: 3}; var y = ++o.x; return [y, o.x]'));
+});
+
+test('dot assign — postfix ++', function () {
+    eq([3, 4], SafeScript::run('var o = {x: 3}; var y = o.x++; return [y, o.x]'));
+});
+
+test('dot assign — prefix --', function () {
+    eq([4, 4], SafeScript::run('var o = {x: 5}; var y = --o.x; return [y, o.x]'));
+});
+
+test('dot assign — postfix --', function () {
+    eq([5, 4], SafeScript::run('var o = {x: 5}; var y = o.x--; return [y, o.x]'));
+});
+
+test('dot assign — returns value', function () {
+    eq(42, SafeScript::run('var o = {x: 0}; var y = (o.x = 42); return y'));
+});
+
+test('dot assign — multiple properties', function () {
+    eq(30, SafeScript::run('var o = {a: 1, b: 2}; o.a = 10; o.b = 20; return o.a + o.b'));
+});
+
+test('dot assign — new property', function () {
+    eq(7, SafeScript::run('var o = {}; o.x = 7; return o.x'));
+});
+
+test('dot assign — null target throws', function () {
+    throws(function () {
+        SafeScript::run('var o = null; o.x = 5');
+    }, 'null');
+});
+
+echo "\n";
+
+// ═══════════════════════════════════════════════════════════════
+// GAP 11: Mutating array methods (push/pop/shift/unshift/splice/sort/reverse/fill)
+// ═══════════════════════════════════════════════════════════════
+echo "Mutating array methods:\n";
+
+test('push modifies original array', function () {
+    eq(3, SafeScript::run('var a = [1, 2]; a.push(3); return a.length'));
+});
+
+test('push returns new length', function () {
+    eq(3, SafeScript::run('var a = [1, 2]; return a.push(3)'));
+});
+
+test('pop modifies original array', function () {
+    eq(2, SafeScript::run('var a = [1, 2, 3]; a.pop(); return a.length'));
+});
+
+test('pop returns removed element', function () {
+    eq(3, SafeScript::run('var a = [1, 2, 3]; return a.pop()'));
+});
+
+test('shift removes first element', function () {
+    eq(2, SafeScript::run('var a = [1, 2, 3]; a.shift(); return a[0]'));
+});
+
+test('unshift adds to front', function () {
+    eq(0, SafeScript::run('var a = [1, 2]; a.unshift(0); return a[0]'));
+});
+
+test('splice removes elements', function () {
+    eq(2, SafeScript::run('var a = [1, 2, 3]; a.splice(1, 1); return a.length'));
+});
+
+test('sort modifies original', function () {
+    eq(1, SafeScript::run('var a = [3, 1, 2]; a.sort(); return a[0]'));
+});
+
+test('reverse modifies original', function () {
+    eq(3, SafeScript::run('var a = [1, 2, 3]; a.reverse(); return a[0]'));
+});
+
+test('fill modifies original', function () {
+    eq(0, SafeScript::run('var a = [1, 2, 3]; a.fill(0); return a[0]'));
+});
+
+test('push on nested array', function () {
+    eq(3, SafeScript::run('var o = {a: [1, 2]}; o.a.push(3); return o.a.length'));
+});
+
+echo "\n";
+
+// ═══════════════════════════════════════════════════════════════
+// GAP 12: Labeled break/continue
+// ═══════════════════════════════════════════════════════════════
+echo "Labeled break/continue:\n";
+
+test('labeled break exits outer loop', function () {
+    eq(1, SafeScript::run('
+        var count = 0;
+        outer: for (var i = 0; i < 3; i++) {
+            for (var j = 0; j < 3; j++) {
+                count++;
+                break outer;
+            }
+        }
+        return count;
+    '));
+});
+
+test('labeled continue skips outer iteration', function () {
+    eq(3, SafeScript::run('
+        var count = 0;
+        outer: for (var i = 0; i < 3; i++) {
+            for (var j = 0; j < 3; j++) {
+                count++;
+                continue outer;
+            }
+        }
+        return count;
+    '));
+});
+
+test('labeled break with while loops', function () {
+    eq(1, SafeScript::run('
+        var count = 0;
+        outer: while (true) {
+            while (true) {
+                count++;
+                break outer;
+            }
+        }
+        return count;
+    '));
+});
+
+echo "\n";
+
+// ═══════════════════════════════════════════════════════════════
+// GAP 13: Sequence expressions (comma operator)
+// ═══════════════════════════════════════════════════════════════
+echo "Sequence expressions:\n";
+
+test('sequence expression returns last value', function () {
+    eq(3, SafeScript::run('return (1, 2, 3)'));
+});
+
+test('sequence expression with side effects', function () {
+    eq(3, SafeScript::run('var x = 0; x = (x = 1, x + 2); return x'));
+});
+
+test('sequence expression in for loop', function () {
+    eq(3, SafeScript::run('
+        var sum = 0;
+        for (var i = 0, j = 5; i < j; i++, j--) {
+            sum++;
+        }
+        return sum;
+    '));
 });
 
 echo "\n";

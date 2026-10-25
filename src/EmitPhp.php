@@ -21,8 +21,25 @@ namespace SafeScript;
 
 class EmitPhp
 {
+    /** @var int Current loop/switch nesting depth for labeled break/continue */
+    private static int $_loopDepth = 0;
+    /** @var array Label stack for labeled break/continue: [{name, depth}] */
+    private static array $_labelStack = [];
+
+    private static function _labelDepth(string $name): int
+    {
+        for ($i = count(self::$_labelStack) - 1; $i >= 0; $i--) {
+            if (self::$_labelStack[$i]['name'] === $name) {
+                return self::$_labelStack[$i]['depth'];
+            }
+        }
+        return self::$_loopDepth; // fallback
+    }
+
     public static function emit(array $node): string
     {
+        self::$_loopDepth = 0;
+        self::$_labelStack = [];
         return self::_emit($node);
     }
 
@@ -279,11 +296,16 @@ class EmitPhp
                 }
                 return $out;
 
+            case 'ThisExpression':
+                return '$__safeThis';
+
             case 'Identifier':
                 $name = $node['name'];
                 if ($name === 'undefined') return 'null';
                 if ($name === 'NaN') return 'NAN';
                 if ($name === 'Infinity') return 'INF';
+                // Runtime variables — need $ prefix
+                if ($name === '__safeThis' || $name === '__thisCell' || $name === '__rng_state') return '$' . $name;
                 // Runtime helper functions — no $ prefix
                 if (str_starts_with($name, '__')) return $name;
                 return '$' . $name;
@@ -332,26 +354,41 @@ class EmitPhp
                 return $out;
 
             case 'WhileStatement':
-                return 'while (' . self::_emit($node['test']) . ') ' . self::_emitLoopBody($node['body']);
+                self::$_loopDepth++;
+                $r = 'while (' . self::_emit($node['test']) . ') ' . self::_emitLoopBody($node['body']);
+                self::$_loopDepth--;
+                return $r;
 
             case 'DoWhileStatement':
-                return 'do ' . self::_emitLoopBody($node['body']) . 'while (' . self::_emit($node['test']) . ");\n";
+                self::$_loopDepth++;
+                $r = 'do ' . self::_emitLoopBody($node['body']) . 'while (' . self::_emit($node['test']) . ");\n";
+                self::$_loopDepth--;
+                return $r;
 
             case 'ForStatement':
                 $init = $node['init'] !== null ? self::_emitForInit($node['init']) : '';
                 $test = $node['test'] !== null ? self::_emit($node['test']) : '';
                 $update = $node['update'] !== null ? self::_emit($node['update']) : '';
-                return "for ({$init}; {$test}; {$update}) " . self::_emitLoopBody($node['body']);
+                self::$_loopDepth++;
+                $r = "for ({$init}; {$test}; {$update}) " . self::_emitLoopBody($node['body']);
+                self::$_loopDepth--;
+                return $r;
 
             case 'ForInStatement':
                 $left = self::_emitForLeft($node['left']);
                 $right = self::_emit($node['right']);
-                return "foreach ({$right} as {$left} => \$_) " . self::_emitLoopBody($node['body']);
+                self::$_loopDepth++;
+                $r = "foreach ({$right} as {$left} => \$_) " . self::_emitLoopBody($node['body']);
+                self::$_loopDepth--;
+                return $r;
 
             case 'ForOfStatement':
                 $left = self::_emitForLeft($node['left']);
                 $right = self::_emit($node['right']);
-                return "foreach ({$right} as {$left}) " . self::_emitLoopBody($node['body']);
+                self::$_loopDepth++;
+                $r = "foreach ({$right} as {$left}) " . self::_emitLoopBody($node['body']);
+                self::$_loopDepth--;
+                return $r;
 
             case 'VariableDeclaration':
                 return self::_emitVarDecl($node) . ";\n";
@@ -409,15 +446,40 @@ class EmitPhp
                 return "({$op}{$arg})";
 
             case 'UpdateExpression':
-                $arg = self::_emit($node['argument']);
+                $argNode = $node['argument'];
                 $op = $node['operator'];
+                // Dot-property update: obj.x++ → __chk_obj($obj,'x'); $obj['x']++
+                if (($argNode['type'] ?? '') === 'MemberExpression' && !($argNode['computed'] ?? false)) {
+                    $chk = self::_emitDotNullCheck($argNode);
+                    $lval = self::_emitDotLValue($argNode);
+                    if ($node['prefix']) return "({$chk}{$op}{$lval})";
+                    return "({$chk}{$lval}{$op})";
+                }
+                $arg = self::_emit($argNode);
                 if ($node['prefix']) return "{$op}{$arg}";
                 return "{$arg}{$op}";
 
             case 'AssignmentExpression':
-                $left = self::_emit($node['left']);
+                $leftNode = $node['left'];
                 $right = self::_emit($node['right']);
                 $op = $node['operator'];
+
+                // Dot-property assignment: obj.x = val → $obj['x'] = val
+                // Uses PHP bracket lvalue for proper nested reference semantics.
+                // BLOCKED_PROPS are already caught at compile time by the validator.
+                if (($leftNode['type'] ?? '') === 'MemberExpression' && !($leftNode['computed'] ?? false)) {
+                    $chk = self::_emitDotNullCheck($leftNode);
+                    $lval = self::_emitDotLValue($leftNode);
+                    if ($op === '+=') return "({$chk}{$lval} = __add({$lval}, {$right}))";
+                    if ($op === '||=') return "({$chk}{$lval} = __or({$lval}, {$right}))";
+                    if ($op === '&&=') return "({$chk}{$lval} = __and({$lval}, {$right}))";
+                    if ($op === '??=') return "({$chk}{$lval} = ({$lval} ?? {$right}))";
+                    if ($op === '**=') return "({$chk}{$lval} = pow({$lval}, {$right}))";
+                    if ($op === '>>>=') return "({$chk}{$lval} = __unsigned_rshift({$lval}, {$right}))";
+                    return "({$chk}{$lval} {$op} {$right})";
+                }
+
+                $left = self::_emit($leftNode);
                 if ($op === '+=') return "{$left} = __add({$left}, {$right})";
                 if ($op === '||=') return "{$left} = __or({$left}, {$right})";
                 if ($op === '&&=') return "{$left} = __and({$left}, {$right})";
@@ -445,12 +507,25 @@ class EmitPhp
                         }
                     }
                     $argStr = implode(', ', $args);
-                    $allArgs = $obj . ', ' . var_export($method, true);
+                    // Use __mutMethod for mutating array methods when base is a variable (lvalue)
+                    $objNode = $calleeNode['object'];
+                    $isLValue = ($objNode['type'] ?? '') === 'Identifier'
+                        || (($objNode['type'] ?? '') === 'MemberExpression');
+                    static $mutatingMethods = ['push'=>1,'pop'=>1,'shift'=>1,'unshift'=>1,
+                        'splice'=>1,'sort'=>1,'reverse'=>1,'fill'=>1];
+                    $fn = ($isLValue && isset($mutatingMethods[$method])) ? '__mutMethod' : '__method';
+                    // For __mutMethod, emit dot-chain objects as bracket lvalue for reference semantics
+                    $mutObj = $obj;
+                    if ($fn === '__mutMethod' && ($objNode['type'] ?? '') === 'MemberExpression'
+                        && !($objNode['computed'] ?? false)) {
+                        $mutObj = self::_emitDotLValue($objNode);
+                    }
+                    $allArgs = $mutObj . ', ' . var_export($method, true);
                     if ($argStr !== '') $allArgs .= ', ' . $argStr;
                     if ($opt) {
-                        return "({$obj} !== null ? __method({$allArgs}) : null)";
+                        return "({$obj} !== null ? {$fn}({$allArgs}) : null)";
                     }
-                    return "__method({$allArgs})";
+                    return "{$fn}({$allArgs})";
                 }
 
                 $callee = self::_emit($node['callee']);
@@ -531,8 +606,8 @@ class EmitPhp
                 foreach ($node['expressions'] as $expr) {
                     $parts[] = self::_emit($expr);
                 }
-                // Use a helper or just comma expr
-                return '(' . implode(', ', $parts) . ')';
+                // PHP has no comma operator; use __seq() helper that returns the last arg
+                return '__seq(' . implode(', ', $parts) . ')';
 
             case 'TryStatement':
                 $out = "try " . self::_emit($node['block']);
@@ -549,6 +624,7 @@ class EmitPhp
                 return $out;
 
             case 'SwitchStatement':
+                self::$_loopDepth++;
                 $out = 'switch (' . self::_emit($node['discriminant']) . ") {\n";
                 foreach ($node['cases'] as $case) {
                     if ($case['test'] !== null) {
@@ -561,17 +637,33 @@ class EmitPhp
                     }
                 }
                 $out .= "}\n";
+                self::$_loopDepth--;
                 return $out;
 
             case 'LabeledStatement':
-                return $node['label']['name'] . ': ' . self::_emit($node['body']);
+                // PHP doesn't support named labels for break/continue.
+                // Track label → loop depth so we can emit break N / continue N.
+                self::$_labelStack[] = ['name' => $node['label']['name'], 'depth' => self::$_loopDepth];
+                $result = self::_emit($node['body']);
+                array_pop(self::$_labelStack);
+                return $result;
 
             case 'BreakStatement':
-                if ($node['label'] !== null) return 'break ' . $node['label']['name'] . ";\n";
+                if ($node['label'] !== null) {
+                    $target = $node['label']['name'];
+                    $targetDepth = self::_labelDepth($target);
+                    $levels = self::$_loopDepth - $targetDepth;
+                    return "break {$levels};\n";
+                }
                 return "break;\n";
 
             case 'ContinueStatement':
-                if ($node['label'] !== null) return 'continue ' . $node['label']['name'] . ";\n";
+                if ($node['label'] !== null) {
+                    $target = $node['label']['name'];
+                    $targetDepth = self::_labelDepth($target);
+                    $levels = self::$_loopDepth - $targetDepth;
+                    return "continue {$levels};\n";
+                }
                 return "continue;\n";
 
             default:
@@ -592,15 +684,16 @@ class EmitPhp
      */
     private static function _emitBodyWithCheck(array $node): string
     {
+        $preamble = "__check();\n\$__safeThis = \$__thisCell['value'] ?? null; \$__thisCell['value'] = null;\n";
         if ($node['type'] === 'BlockStatement') {
-            $out = "{\n__check();\n";
+            $out = "{\n" . $preamble;
             foreach ($node['body'] as $stmt) {
                 $out .= self::_emit($stmt);
             }
             $out .= "}\n";
             return $out;
         }
-        return "{\n__check();\n" . self::_emit($node) . "}\n";
+        return "{\n" . $preamble . self::_emit($node) . "}\n";
     }
 
     /**
@@ -631,7 +724,12 @@ class EmitPhp
     private static function _emitForInit(array $node): string
     {
         if ($node['type'] === 'VariableDeclaration') {
-            return self::_emitVarDecl($node);
+            // In for-loop init, multiple declarators use comma, not semicolon
+            $parts = [];
+            foreach ($node['declarations'] as $decl) {
+                $parts[] = self::_emit($decl);
+            }
+            return implode(', ', $parts);
         }
         return self::_emit($node);
     }
@@ -768,5 +866,43 @@ class EmitPhp
             return var_export($prop['key']['value'], true);
         }
         return var_export($prop['key']['name'] ?? '', true);
+    }
+
+    /**
+     * Emit a non-computed MemberExpression chain as a PHP bracket lvalue.
+     * obj.a.b → $obj['a']['b']
+     * This produces a valid PHP lvalue for assignment/update,
+     * with proper nested reference semantics.
+     * BLOCKED_PROPS are already rejected by the validator at compile time.
+     */
+    /**
+     * Emit a null-check on the base object of a dot-access lvalue chain.
+     * For obj.x → "__chk_obj($obj, 'x'); "
+     * For obj.a.b → "__chk_obj($obj, 'a'); "  (checks outermost base)
+     */
+    private static function _emitDotNullCheck(array $node): string
+    {
+        // Walk to the base of the chain
+        $current = $node;
+        while (($current['object']['type'] ?? '') === 'MemberExpression'
+            && !($current['object']['computed'] ?? false)) {
+            $current = $current['object'];
+        }
+        $base = self::_emit($current['object']);
+        $prop = var_export($current['property']['name'] ?? '', true);
+        return "__chk_obj({$base}, {$prop}) ?? ";
+    }
+
+    private static function _emitDotLValue(array $node): string
+    {
+        $prop = var_export($node['property']['name'] ?? '', true);
+        $objNode = $node['object'];
+        // If the object is itself a non-computed MemberExpression, recurse
+        if (($objNode['type'] ?? '') === 'MemberExpression' && !($objNode['computed'] ?? false)) {
+            return self::_emitDotLValue($objNode) . "[{$prop}]";
+        }
+        // Base case: emit the object normally and append bracket access
+        $obj = self::_emit($objNode);
+        return "{$obj}[{$prop}]";
     }
 }
