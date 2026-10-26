@@ -1,0 +1,43 @@
+{
+  "name": "safescript",
+  "version": "1.2.0",
+  "description": "SafeScript — a safe computational subset of JavaScript. JSON for code.",
+  "main": "index.js",
+  "browser": "safescript.js",
+  "files": [
+    "index.js",
+    "safe.js",
+    "safescript.js",
+    "safescript.min.js",
+    "src/"
+  ],
+  "scripts": {
+    "test": "node test.js && node test-compiler.js && node test-battle.js && node test-header.js",
+    "build": "node browser.js > safescript.js",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "keywords": [
+    "safe",
+    "sandbox",
+    "javascript",
+    "subset",
+    "compiler",
+    "security",
+    "safescript",
+    "capability",
+    "ocap"
+  ],
+  "author": "Gregory Magarshak",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SafeScript/safescript.git"
+  },
+  "dependencies": {
+    "playwright": "^1.64.1"
+  },
+  "devDependencies": {
+    "archiver": "^8.0.0",
+    "jsdom": "^29.1.1"
+  }
+}
