@@ -1,5 +1,6 @@
 {
     "name": "qbix/safescript",
+    "version": "1.3.0",
     "description": "SafeScript — a safe computational subset of JavaScript, compiled to PHP",
     "type": "library",
     "license": "MIT",

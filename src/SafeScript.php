@@ -20,6 +20,14 @@ class SafeScript
     private static array $_typeNames = [];   // maps short type name → class name
 
     /**
+     * v1.3: Built-in type names for @uses directives.
+     */
+    const TYPES = [
+        'SafeFiles' => 'SafeFiles',
+        'SafeHttp'  => 'SafeHttp',
+    ];
+
+    /**
      * Compile SafeScript source to PHP code.
      * @return array{code: string, hash: string}
      */
@@ -44,13 +52,21 @@ class SafeScript
     public static function run($sourceOrBundle, array $scope = [], array $opts = [])
     {
         // Bundle overload
+        $parsedHeader = null;
         if (is_array($sourceOrBundle)) {
             $source = $sourceOrBundle['source'] ?? '';
             $scope = $sourceOrBundle['scope'] ?? [];
+            $parsedHeader = $sourceOrBundle['header'] ?? null;
             $opts = $sourceOrBundle['opts'] ?? $opts;
         } else {
             $source = $sourceOrBundle;
         }
+
+        // v1.3: Parse header for @uses directives
+        if ($parsedHeader === null) {
+            $parsedHeader = Header::parseHeader($source);
+        }
+        $opts['header'] = $parsedHeader;
 
         // Compile
         $compiled = Compiler::compile($source);
@@ -161,8 +177,11 @@ class SafeScript
      * Load a .safe file with dependency resolution.
      * Unlike JS version, this is synchronous.
      * Auto-fills from registered libraries for any @needs/@uses not in scope.
+     *
+     * Returns a bundle ['source' => ..., 'scope' => ..., 'header' => ...] that can
+     * be passed to run().
      */
-    public static function load(string $source, ?callable $resolver = null, array $opts = [])
+    public static function load(string $source, ?callable $resolver = null): array
     {
         $header = Header::parseHeader($source);
         $scope = [];
@@ -217,7 +236,7 @@ class SafeScript
             }
         }
 
-        return self::run($source, $scope, $opts);
+        return ['source' => $source, 'scope' => $scope, 'header' => $header];
     }
 
     /**
@@ -306,6 +325,18 @@ class SafeScript
     {
         self::$_typeRegistry = [];
         self::$_typeNames = [];
+    }
+
+    /**
+     * v1.3: Resolve @uses directives against built-in type registry.
+     * Delegates to Header::resolveUses().
+     *
+     * @param array $header Parsed header from parseHeader()/capabilities()
+     * @return array{dom: bool, usesEntries: array}
+     */
+    public static function resolveUses(array $header): array
+    {
+        return Header::resolveUses($header);
     }
 
     /**

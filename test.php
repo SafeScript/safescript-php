@@ -856,10 +856,14 @@ test('sanitize deep', function () {
 
 test('load with resolver', function () {
     $source = "/**\n * @needs x: Num\n */\nreturn x + 1";
-    $result = SafeScript::load($source, function ($name) {
+    $bundle = SafeScript::load($source, function ($name) {
         if ($name === 'x') return 10;
         return null;
     });
+    // v1.3: load() returns a bundle with header, run it to get result
+    assert(is_array($bundle) && isset($bundle['source']), 'load returns bundle');
+    assert(isset($bundle['header']), 'bundle has header');
+    $result = SafeScript::run($bundle);
     eq(11, $result);
 });
 
@@ -1463,7 +1467,9 @@ test('lib/unlib/libs registration', function () {
 test('load auto-fills from registered libs', function () {
     SafeScript::lib('myMath', ['double' => function($x) { return $x * 2; }]);
     $source = "/**\n * @needs myMath: Obj\n */\nreturn myMath.double(5)";
-    $result = SafeScript::load($source);
+    $bundle = SafeScript::load($source);
+    // v1.3: load() returns a bundle, run it to get the result
+    $result = SafeScript::run($bundle);
     eq(10, $result);
     SafeScript::unlib('myMath');
 });

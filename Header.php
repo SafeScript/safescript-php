@@ -89,4 +89,50 @@ class Header
         if ($end === false) return $source;
         return substr($trimmed, $end + 2);
     }
+
+    /**
+     * Built-in type registry — maps @uses type names to their built-in providers.
+     * When the runtime sees one of these types in @uses, it knows how to
+     * auto-inject the corresponding scope without host configuration.
+     *
+     * Each entry: ['scopeKey' => string|null, 'provider' => string]
+     */
+    const BUILTIN_TYPES = [
+        // File I/O scoped to a folder, with size limits
+        'SafeFiles'      => ['scopeKey' => 'files',    'provider' => 'files'],
+        // HTTP requests restricted to allowed domains
+        'SafeHttp'       => ['scopeKey' => 'http',     'provider' => 'http'],
+    ];
+
+    /**
+     * Resolve @uses directives against the built-in type registry.
+     * Returns which built-in providers need to be activated.
+     *
+     * @param array $header Parsed header from parseHeader()
+     * @return array{files: bool, http: bool, usesEntries: array}
+     */
+    public static function resolveUses(array $header): array
+    {
+        $result = [
+            'files' => false,
+            'http' => false,
+            'usesEntries' => [],
+        ];
+        if (empty($header['uses'])) return $result;
+
+        foreach ($header['uses'] as $entry) {
+            $typeName = $entry['type'] ?? null;
+            if ($typeName !== null && isset(self::BUILTIN_TYPES[$typeName])) {
+                $builtin = self::BUILTIN_TYPES[$typeName];
+                $result[$builtin['provider']] = true;
+                $result['usesEntries'][] = [
+                    'name' => $entry['name'],
+                    'type' => $typeName,
+                    'builtin' => $builtin,
+                ];
+            }
+        }
+
+        return $result;
+    }
 }

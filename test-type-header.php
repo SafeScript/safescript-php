@@ -196,10 +196,11 @@ test('load() with registered @type succeeds', function() {
     c.increment()
     return c.value()';
 
-    $result = SafeScript::load($src, function($name) {
+    $bundle = SafeScript::load($src, function($name) {
         if ($name === 'c') return new TypeHeaderCounter(5);
         return null;
     });
+    $result = SafeScript::run($bundle);
     assertEq($result, 6);
 });
 
@@ -242,7 +243,8 @@ test('load() with @type — all declared methods allowed passes', function() {
     return 1';
 
     // Should not throw
-    $result = SafeScript::load($src);
+    $bundle = SafeScript::load($src);
+    $result = SafeScript::run($bundle);
     assertEq($result, 1);
 });
 
@@ -269,7 +271,8 @@ test('load() validates @type against direct class registration too', function() 
     return 1';
 
     // Should succeed — TypeHeaderCounter is in type registry directly
-    $result = SafeScript::load($src);
+    $bundle = SafeScript::load($src);
+    $result = SafeScript::run($bundle);
     assertEq($result, 1);
 });
 
@@ -287,7 +290,8 @@ test('load() validates multiple @type declarations', function() {
      */
     return 1';
 
-    $result = SafeScript::load($src);
+    $bundle = SafeScript::load($src);
+    $result = SafeScript::run($bundle);
     assertEq($result, 1);
 });
 
