@@ -23,8 +23,18 @@ class SafeScript
      * v1.3: Built-in type names for @uses directives.
      */
     const TYPES = [
-        'SafeFiles' => 'SafeFiles',
-        'SafeHttp'  => 'SafeHttp',
+        'SafeFiles'       => 'SafeFiles',
+        'SafeHttp'        => 'SafeHttp',
+        'SafeDOMDocument' => 'SafeDOMDocument',
+        'SafeHTMLElement' => 'SafeHTMLElement',
+        'SafeWindow'      => 'SafeWindow',
+        'SafeJQuery'      => 'SafeJQuery',
+        'SafeQ'           => 'SafeQ',
+        'SafeConsole'     => 'SafeConsole',
+        'SafeObservers'   => 'SafeObservers',
+        'SafeCanvas'      => 'SafeCanvas',
+        'SafeMedia'       => 'SafeMedia',
+        'SafeNavigation'  => 'SafeNavigation',
     ];
 
     /**

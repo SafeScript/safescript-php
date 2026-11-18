@@ -98,10 +98,20 @@ class Header
      * Each entry: ['scopeKey' => string|null, 'provider' => string]
      */
     const BUILTIN_TYPES = [
-        // File I/O scoped to a folder, with size limits
-        'SafeFiles'      => ['scopeKey' => 'files',    'provider' => 'files'],
-        // HTTP requests restricted to allowed domains
-        'SafeHttp'       => ['scopeKey' => 'http',     'provider' => 'http'],
+        // Server-side types (PHP runtime)
+        'SafeFiles'       => ['scopeKey' => 'files',    'provider' => 'files'],
+        'SafeHttp'        => ['scopeKey' => 'http',     'provider' => 'http'],
+        // Browser-side DOM types (JS runtime only — parsed but not instantiated in PHP)
+        'SafeDOMDocument' => ['scopeKey' => 'document', 'provider' => 'dom'],
+        'SafeHTMLElement' => ['scopeKey' => null,       'provider' => 'dom'],
+        'SafeWindow'      => ['scopeKey' => 'window',   'provider' => 'window'],
+        'SafeJQuery'      => ['scopeKey' => '$',        'provider' => 'dom'],
+        'SafeQ'           => ['scopeKey' => 'Q',        'provider' => 'dom'],
+        'SafeConsole'     => ['scopeKey' => 'console',  'provider' => 'console'],
+        'SafeObservers'   => ['scopeKey' => null,       'provider' => 'observers'],
+        'SafeCanvas'      => ['scopeKey' => null,       'provider' => 'canvas'],
+        'SafeMedia'       => ['scopeKey' => null,       'provider' => 'media'],
+        'SafeNavigation'  => ['scopeKey' => null,       'provider' => 'navigation'],
     ];
 
     /**
@@ -109,13 +119,20 @@ class Header
      * Returns which built-in providers need to be activated.
      *
      * @param array $header Parsed header from parseHeader()
-     * @return array{files: bool, http: bool, usesEntries: array}
+     * @return array Provider flags + usesEntries
      */
     public static function resolveUses(array $header): array
     {
         $result = [
             'files' => false,
             'http' => false,
+            'dom' => false,
+            'window' => false,
+            'console' => false,
+            'observers' => false,
+            'canvas' => false,
+            'media' => false,
+            'navigation' => false,
             'usesEntries' => [],
         ];
         if (empty($header['uses'])) return $result;
