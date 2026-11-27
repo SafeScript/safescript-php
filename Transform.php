@@ -229,6 +229,7 @@ class Transform
     {
         return [
             'type' => 'CallExpression',
+            'runtimeHelper' => true,
             'callee' => [
                 'type' => 'Identifier',
                 'name' => $name,

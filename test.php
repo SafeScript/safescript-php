@@ -1254,7 +1254,7 @@ test('hooks — resource throttling use case', function () {
 test('hooks — string callable in scope gets wrapped', function () {
     $log = [];
     $result = SafeScript::run('return upper("hello")', [
-        'upper' => 'strtoupper',
+        'upper' => \Closure::fromCallable('strtoupper'),
     ], [
         'hooks' => [
             'beforeCall' => function ($info) use (&$log) {
@@ -1273,7 +1273,7 @@ test('hooks — array callable [$obj, method] in scope gets wrapped', function (
     };
     $log = [];
     $result = SafeScript::run('return greeter("world")', [
-        'greeter' => [$obj, 'greet'],
+        'greeter' => \Closure::fromCallable([$obj, 'greet']),
     ], [
         'hooks' => [
             'beforeCall' => function ($info) use (&$log) {
@@ -1296,7 +1296,7 @@ test('hooks — static array callable [Class, method] gets wrapped', function ()
     $className = get_class($cls);
 
     $result = SafeScript::run('return fn("hello")', [
-        'fn' => [$className, 'shout'],
+        'fn' => \Closure::fromCallable([$className, 'shout']),
     ], [
         'hooks' => [
             'beforeCall' => function ($info) use (&$log) {
@@ -1385,7 +1385,7 @@ test('hooks — array callable blocked by beforeCall', function () {
         public function danger(): string { return "SHOULD NOT RUN"; }
     };
     $result = SafeScript::run('return action()', [
-        'action' => [$obj, 'danger'],
+        'action' => \Closure::fromCallable([$obj, 'danger']),
     ], [
         'hooks' => [
             'beforeCall' => function ($info) { return false; },
@@ -1682,6 +1682,28 @@ test('sequence expression in for loop', function () {
 echo "\n";
 
 // ═══════════════════════════════════════════════════════════════
+test('unwrapped values stay data with or without hooks', function () {
+    foreach ([[], ['hooks' => []]] as $options) {
+        $scope = ['label' => 'strtoupper', 'pair' => ['demo', 'label']];
+        eq('string', SafeScript::run('return typeof label', $scope, $options));
+        eq('object', SafeScript::run('return typeof pair', $scope, $options));
+        throws(function () use ($options) {
+            SafeScript::run('return label()', ['label' => 'ordinary text'], $options);
+        }, 'expected a function');
+    }
+});
+
+test('higher-order and optional calls preserve closure authority', function () {
+    $scope = ['inc' => function ($n) { return $n + 1; }];
+    eq([2, 3], SafeScript::run('return Array.from([1, 2], inc)', $scope));
+    eq(5, SafeScript::run('return inc?.(4)', $scope));
+    foreach (['return [1].map(label)', 'return Array.from([1], label)', 'return label?.()'] as $source) {
+        throws(function () use ($source) {
+            SafeScript::run($source, ['label' => 'ordinary text']);
+        }, 'expected a function');
+    }
+});
+
 // SUMMARY
 // ═══════════════════════════════════════════════════════════════
 echo "\n";

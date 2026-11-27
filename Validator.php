@@ -37,7 +37,7 @@ class Validator
                 break;
 
             case 'Identifier':
-                if (isset(Defs::BLOCKED[$node['name']])) {
+                if (str_starts_with($node['name'], '__') || isset(Defs::BLOCKED[$node['name']])) {
                     throw new ValidationError(
                         "Blocked identifier \"{$node['name']}\" at line {$loc['line']}, col {$loc['col']}",
                         $loc['line'], $loc['col']
@@ -229,7 +229,7 @@ class Validator
         switch ($type) {
             case 'Identifier':
                 $name = $node['name'];
-                if ($name === 'eval' || $name === 'arguments') {
+                if (str_starts_with($name, '__') || $name === 'eval' || $name === 'arguments') {
                     throw new ValidationError(
                         "Cannot bind \"{$name}\" at line {$loc['line']}, col {$loc['col']}",
                         $loc['line'], $loc['col']

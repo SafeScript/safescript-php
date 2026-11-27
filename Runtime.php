@@ -18,6 +18,11 @@ class Runtime
         return <<<'PHP'
 // ── SafeScript runtime helpers ──
 
+function __closure($value) {
+    if (!($value instanceof \Closure)) throw new \RuntimeException('SafeScript expected a function capability');
+    return $value;
+}
+
 function __at($obj, $key) {
     if ($obj === null) throw new \RuntimeException('Cannot read property "' . $key . '" of null');
     $k = (string)$key;
@@ -127,8 +132,8 @@ function __mutMethod(&$obj, $name, ...$args) {
                 $items = array_slice($args, 2);
                 return array_splice($obj, $start, $deleteCount, $items);
             case 'sort':
-                if (!empty($args) && is_callable($args[0])) {
-                    usort($obj, $args[0]);
+                if (isset($args[0])) {
+                    usort($obj, __closure($args[0]));
                 } else {
                     usort($obj, function($a, $b) { return strcmp((string)$a, (string)$b); });
                 }
@@ -233,11 +238,11 @@ function __method($obj, $name, ...$args) {
                 return $result;
             case 'map':
                 return array_values(array_map(function($v, $i) use ($args, $obj) {
-                    return ($args[0])($v, $i, $obj);
+                    return __closure($args[0])($v, $i, $obj);
                 }, $obj, array_keys($obj)));
             case 'filter':
                 return array_values(array_filter($obj, function($v, $i) use ($args, $obj) {
-                    return __truthy(($args[0])($v, $i, $obj));
+                    return __truthy(__closure($args[0])($v, $i, $obj));
                 }, ARRAY_FILTER_USE_BOTH));
             case 'reduce':
                 $fn = $args[0] ?? null;
@@ -245,44 +250,44 @@ function __method($obj, $name, ...$args) {
                 $started = isset($args[1]);
                 foreach ($obj as $i => $v) {
                     if (!$started) { $acc = $v; $started = true; continue; }
-                    $acc = $fn($acc, $v, $i, $obj);
+                    $acc = __closure($fn)($acc, $v, $i, $obj);
                 }
                 return $acc;
             case 'find':
                 foreach ($obj as $i => $v) {
-                    if (__truthy(($args[0])($v, $i, $obj))) return $v;
+                    if (__truthy(__closure($args[0])($v, $i, $obj))) return $v;
                 }
                 return null;
             case 'findIndex':
                 foreach ($obj as $i => $v) {
-                    if (__truthy(($args[0])($v, $i, $obj))) return $i;
+                    if (__truthy(__closure($args[0])($v, $i, $obj))) return $i;
                 }
                 return -1;
             case 'some':
                 foreach ($obj as $i => $v) {
-                    if (__truthy(($args[0])($v, $i, $obj))) return true;
+                    if (__truthy(__closure($args[0])($v, $i, $obj))) return true;
                 }
                 return false;
             case 'every':
                 foreach ($obj as $i => $v) {
-                    if (!__truthy(($args[0])($v, $i, $obj))) return false;
+                    if (!__truthy(__closure($args[0])($v, $i, $obj))) return false;
                 }
                 return true;
             case 'forEach':
-                foreach ($obj as $i => $v) { ($args[0])($v, $i, $obj); }
+                foreach ($obj as $i => $v) { __closure($args[0])($v, $i, $obj); }
                 return null;
             case 'flat':
                 $depth = $args[0] ?? 1;
                 return __flat($obj, (int)$depth);
             case 'flatMap':
                 $mapped = array_map(function($v, $i) use ($args, $obj) {
-                    return ($args[0])($v, $i, $obj);
+                    return __closure($args[0])($v, $i, $obj);
                 }, $obj, array_keys($obj));
                 return __flat($mapped, 1);
             case 'sort':
                 $arr = $obj;
-                if (!empty($args) && is_callable($args[0])) {
-                    usort($arr, $args[0]);
+                if (isset($args[0])) {
+                    usort($arr, __closure($args[0]));
                 } else {
                     usort($arr, function($a, $b) { return strcmp((string)$a, (string)$b); });
                 }
@@ -310,17 +315,15 @@ function __method($obj, $name, ...$args) {
         }
     }
     // Object/callable methods — plain associative arrays (scope objects)
-    if (is_array($obj) && isset($obj[$name]) && is_callable($obj[$name])) {
+    if (is_array($obj) && isset($obj[$name]) && ($obj[$name] instanceof \Closure)) {
         return ($obj[$name])(...$args);
     }
     // Host objects
     if (is_object($obj)) {
-        // Built-in error/exception family — allow all methods (matches JS SAFE_CTORS)
+        // Limit exceptions to safe diagnostic values.
         if ($obj instanceof \Throwable) {
-            $phpName = ($name === 'toString') ? '__toString' : $name;
-            if (method_exists($obj, $phpName)) {
-                return $obj->$phpName(...$args);
-            }
+            if ($name === 'toString' || $name === 'getMessage') return $obj->getMessage();
+            if ($name === 'getCode') return $obj->getCode();
             return null;
         }
         // Check type registry
@@ -357,7 +360,7 @@ function __method($obj, $name, ...$args) {
             if (method_exists($obj, $phpName)) {
                 return $obj->$phpName(...$args);
             }
-            if (isset($obj->$name) && is_callable($obj->$name)) {
+            if (isset($obj->$name) && ($obj->$name instanceof \Closure)) {
                 return ($obj->$name)(...$args);
             }
             return null;
@@ -396,7 +399,7 @@ function __typeof($val) {
     if (is_bool($val)) return 'boolean';
     if (is_int($val) || is_float($val)) return 'number';
     if (is_string($val)) return 'string';
-    if (is_callable($val)) return 'function';
+    if (($val instanceof \Closure)) return 'function';
     return 'object';
 }
 
@@ -442,7 +445,7 @@ function __instanceof($val, $type) {
         switch ($type) {
             case 'Array': return is_array($val) && array_is_list($val);
             case 'Object': return is_array($val) || is_object($val);
-            case 'Function': return is_callable($val);
+            case 'Function': return ($val instanceof \Closure);
             case 'RegExp': return false;
         }
     }
@@ -542,7 +545,7 @@ $Array = [
     'isArray' => function($val) { return is_array($val); },
     'from' => function($val, $mapFn = null) {
         $arr = is_array($val) ? $val : (is_string($val) ? str_split($val) : []);
-        if ($mapFn !== null) return array_map($mapFn, $arr, array_keys($arr));
+        if ($mapFn !== null) return array_map(__closure($mapFn), $arr, array_keys($arr));
         return $arr;
     },
     'of' => function(...$args) { return $args; },

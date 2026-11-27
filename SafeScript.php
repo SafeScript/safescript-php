@@ -410,23 +410,12 @@ class SafeScript
     }
 
     /**
-     * Check whether a value is a PHP callable (not a scope-object array).
-     * Distinguishes [$obj, 'method'] callables from associative scope arrays.
+     * Only explicit closures carry function authority across the scope boundary.
      */
     private static function _isCallable($value): bool
     {
         // Closures are always callable
-        if ($value instanceof \Closure) return true;
-        // String callables: 'strlen', 'MyClass::method'
-        if (is_string($value) && is_callable($value)) return true;
-        // Array callables: [$obj, 'method'] or ['ClassName', 'method']
-        // These are exactly 2-element indexed arrays with string second element
-        if (is_array($value) && count($value) === 2
-            && array_key_exists(0, $value) && array_key_exists(1, $value)
-            && is_string($value[1]) && is_callable($value)) {
-            return true;
-        }
-        return false;
+        return $value instanceof \Closure;
     }
 
     /**

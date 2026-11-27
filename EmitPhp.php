@@ -540,10 +540,12 @@ class EmitPhp
                     }
                 }
                 $argStr = implode(', ', $args);
-                if ($opt) {
-                    return "({$callee} !== null ? {$callee}({$argStr}) : null)";
+                if (!empty($node['runtimeHelper'])) {
+                    return "{$callee}({$argStr})";
                 }
-                return "{$callee}({$argStr})";
+                $value = $opt ? '$__optionalTarget' : $callee;
+                $invoke = "__closure({$value})({$argStr})";
+                return $opt ? "((\$__optionalTarget = {$callee}) === null ? null : {$invoke})" : $invoke;
 
             case 'MemberExpression':
                 $obj = self::_emit($node['object']);
