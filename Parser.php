@@ -1070,6 +1070,30 @@ class Parser
         $t = $tok['type'];
         $v = $tok['value'];
 
+        if ($t === Tokenizer::T_KEYWORD && $v === 'new') {
+            $this->eat(Tokenizer::T_KEYWORD, 'new');
+            $callee = $this->_parsePrimary();
+            while ($this->match(Tokenizer::T_PUNCT, '.')) {
+                $this->eat(Tokenizer::T_PUNCT, '.');
+                $member = $this->node('MemberExpression', $tok['line'], $tok['col']);
+                $member['object'] = $callee;
+                $member['property'] = $this->_parseIdentOrKeyword();
+                $member['computed'] = false;
+                $member['optional'] = false;
+                $callee = $member;
+            }
+            $args = [];
+            if ($this->match(Tokenizer::T_PUNCT, '(')) {
+                $this->eat(Tokenizer::T_PUNCT, '(');
+                $args = $this->_parseArguments();
+                $this->eat(Tokenizer::T_PUNCT, ')');
+            }
+            $node = $this->node('NewExpression', $tok['line'], $tok['col']);
+            $node['callee'] = $callee;
+            $node['arguments'] = $args;
+            return $node;
+        }
+
         // Identifier
         if ($t === Tokenizer::T_IDENT) {
             return $this->_parseIdentifier();

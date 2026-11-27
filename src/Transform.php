@@ -165,6 +165,7 @@ class Transform
                 $node['alternate'] = self::visit($node['alternate']);
                 break;
 
+            case 'NewExpression':
             case 'CallExpression':
                 $node['callee'] = self::visit($node['callee']);
                 $node['arguments'] = array_map([self::class, 'visit'], $node['arguments']);

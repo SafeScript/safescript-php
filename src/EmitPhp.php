@@ -208,6 +208,7 @@ class EmitPhp
                 self::_collectVars($node['alternate'], $declared, $referenced, $inNested);
                 break;
 
+            case 'NewExpression':
             case 'CallExpression':
                 self::_collectVars($node['callee'], $declared, $referenced, $inNested);
                 foreach ($node['arguments'] as $arg) {
@@ -490,6 +491,13 @@ class EmitPhp
 
             case 'ConditionalExpression':
                 return '(' . self::_emit($node['test']) . ' ? ' . self::_emit($node['consequent']) . ' : ' . self::_emit($node['alternate']) . ')';
+
+            case 'NewExpression':
+                $args = [self::_emit($node['callee'])];
+                foreach ($node['arguments'] as $arg) {
+                    $args[] = self::_emit($arg);
+                }
+                return '\\SafeScript\\SafeScript::constructFromGrant(' . implode(', ', $args) . ')';
 
             case 'CallExpression':
                 // Check for method call pattern: obj.method(args) → __method(obj, 'method', args)

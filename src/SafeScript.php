@@ -14,6 +14,21 @@ namespace SafeScript;
 
 class SafeScript
 {
+    /** Each active run has an identity map. Nested runs and fibers use separate grants. */
+    private static ?\WeakMap $constructorRuns = null;
+    private static ?object $mainContext = null;
+
+    /** Internal target for emitted NewExpression nodes. */
+    public static function constructFromGrant($token, ...$args)
+    {
+        $context = \Fiber::getCurrent() ?? self::$mainContext;
+        $grants = $context ? (self::$constructorRuns[$context] ?? null) : null;
+        if (!is_object($token) || !isset($grants[$token])) {
+            throw new \RuntimeException('SafeScript: constructor not granted for this run');
+        }
+        return ($grants[$token])(...$args);
+    }
+
     private static bool $_helpersLoaded = false;
     private static array $_libs = [];
     private static array $_typeRegistry = [];
@@ -98,17 +113,24 @@ class SafeScript
         }
         $maxOps = min($maxOps, self::MAX_OPS);
 
-        // Set globals for __check()
-        $GLOBALS['__safescript_deadline'] = microtime(true) + $timeout;
-        $GLOBALS['__safescript_ops'] = $maxOps;
-
-        // Inject type registry for __method() to check
-        $GLOBALS['__safescript_type_registry'] = self::$_typeRegistry;
+        $factories = $opts['allowNew'] ?? [];
+        if (!is_array($factories)) throw new \InvalidArgumentException('allowNew expects a name-to-closure map');
+        $grants = new \WeakMap();
+        $hooks = $opts['hooks'] ?? null;
+        $hookState = ['callCount' => 0, 'startTime' => microtime(true)];
+        foreach ($factories as $name => $factory) {
+            if (!is_string($name) || !preg_match('/^[A-Za-z][A-Za-z0-9_]*$/D', $name)
+                || isset(Defs::BLOCKED[$name]) || isset(Defs::BLOCKED_KW[$name]) || isset(Defs::ALLOWED_KW[$name])
+                || array_key_exists($name, $scope) || !($factory instanceof \Closure)) {
+                throw new \InvalidArgumentException('allowNew requires a distinct identifier and an explicit factory closure');
+            }
+            $token = new \stdClass();
+            $scope[$name] = $token;
+            $grants[$token] = $hooks === null ? $factory : self::_wrapFnWithHooks($name, $factory, $hooks, $hookState);
+        }
 
         // Wrap scope with hooks if provided
-        $hooks = $opts['hooks'] ?? null;
         if ($hooks !== null) {
-            $hookState = ['callCount' => 0, 'startTime' => microtime(true)];
             $scope = self::_wrapScopeWithHooks($scope, $hooks, $hookState);
         }
 
@@ -139,13 +161,28 @@ class SafeScript
         $wrapper .= $phpCode;
         $wrapper .= "\n})();\n";
 
+        $oldDeadline = $GLOBALS['__safescript_deadline'] ?? null;
+        $oldOps = $GLOBALS['__safescript_ops'] ?? null;
+        $oldRegistry = $GLOBALS['__safescript_type_registry'] ?? null;
+        $GLOBALS['__safescript_deadline'] = microtime(true) + $timeout;
+        $GLOBALS['__safescript_ops'] = $maxOps;
+        $GLOBALS['__safescript_type_registry'] = self::$_typeRegistry;
+        self::$constructorRuns ??= new \WeakMap();
+        $context = \Fiber::getCurrent() ?? (self::$mainContext ??= new \stdClass());
+        $previous = self::$constructorRuns[$context] ?? null;
+        self::$constructorRuns[$context] = $grants;
         try {
             $result = self::_execute($wrapper, $scope);
         } finally {
-            // Clean up globals
+            if ($previous === null) unset(self::$constructorRuns[$context]);
+            else self::$constructorRuns[$context] = $previous;
+            // Restore any outer run's budget and method policy.
             unset($GLOBALS['__safescript_deadline']);
             unset($GLOBALS['__safescript_ops']);
             unset($GLOBALS['__safescript_type_registry']);
+            if ($oldDeadline !== null) $GLOBALS['__safescript_deadline'] = $oldDeadline;
+            if ($oldOps !== null) $GLOBALS['__safescript_ops'] = $oldOps;
+            if ($oldRegistry !== null) $GLOBALS['__safescript_type_registry'] = $oldRegistry;
         }
 
         return $result;

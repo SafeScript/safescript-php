@@ -31,7 +31,7 @@ class Defs
 
     /** Keywords that are blocked (parse errors) */
     public const BLOCKED_KW = [
-        'new' => true, 'delete' => true, 'class' => true,
+        'delete' => true, 'class' => true,
         'extends' => true, 'super' => true, 'with' => true,
         'import' => true, 'export' => true, 'debugger' => true,
         'yield' => true,
@@ -44,7 +44,7 @@ class Defs
         'if' => true, 'else' => true,
         'for' => true, 'while' => true, 'do' => true,
         'break' => true, 'continue' => true, 'return' => true,
-        'function' => true,
+        'function' => true, 'new' => true,
         'try' => true, 'catch' => true, 'finally' => true,
         'throw' => true,
         'switch' => true, 'case' => true, 'default' => true,

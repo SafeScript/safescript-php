@@ -141,6 +141,7 @@ class Validator
                 self::walk($node['alternate']);
                 break;
 
+            case 'NewExpression':
             case 'CallExpression':
                 self::walk($node['callee']);
                 foreach ($node['arguments'] as $arg) self::walk($arg);

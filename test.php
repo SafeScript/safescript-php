@@ -152,7 +152,7 @@ test('blocked identifier', function () {
 
 test('blocked keyword', function () {
     throws(function () {
-        $t = new Tokenizer('new Foo()');
+        $t = new Tokenizer('class Foo {}');
         $t->tokenize();
     }, 'Blocked');
 });
@@ -726,7 +726,43 @@ test('blocks process', function () {
     throws(function () { SafeScript::run('return process', []); });
 });
 
-test('blocks new', function () {
+test('constructor grants support aliases, members, spread and chaining', function () {
+    $opts = ['allowNew' => ['Point' => fn($x=0, $y=0) => ['sum' => $x+$y]]];
+    eq(7, SafeScript::run('let kinds = {P: Point}; return new kinds.P(...[3,4]).sum', [], $opts));
+    eq(0, SafeScript::run('let make = () => new Point; return make().sum', [], $opts));
+    eq(6, SafeScript::run('let P = Point; return new P(6).sum', [], $opts));
+});
+
+test('constructor grants are distinct from data, functions and method registration', function () {
+    $opts = ['allowNew' => ['Point' => fn() => ['x'=>1]]];
+    $token = SafeScript::run('return Point', [], $opts);
+    foreach (['Point', new \stdClass(), fn() => 1, $token] as $value) {
+        throws(fn() => SafeScript::run('return new Other()', ['Other'=>$value], $opts), 'not granted');
+    }
+    throws(fn() => SafeScript::run('return Point()', [], $opts), 'expected a function');
+    throws(fn() => SafeScript::run('return 1', [], ['allowNew'=>['Point'=>'ordinary text']]), 'explicit factory');
+});
+
+test('nested run cannot borrow outer constructor and restores outer grant', function () {
+    $nested = function ($outer) {
+        throws(fn() => SafeScript::run('return new P()', ['P'=>$outer]), 'not granted');
+        return 0;
+    };
+    eq(4, SafeScript::run('nested(P); return new P().x', ['nested'=>$nested],
+        ['allowNew'=>['P'=>fn()=>['x'=>4]]]));
+});
+
+test('constructor honors the host call hook', function () {
+    $calls = 0;
+    $value = SafeScript::run('return new P()', [], [
+        'allowNew'=>['P'=>function () use (&$calls) { $calls++; return []; }],
+        'hooks'=>['beforeCall'=>fn($info)=>false],
+    ]);
+    eq(null, $value);
+    eq(0, $calls);
+});
+
+test('blocks ungranted Object constructor', function () {
     throws(function () { SafeScript::run('return new Object()', []); });
 });
 
